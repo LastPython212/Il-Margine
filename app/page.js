@@ -93,7 +93,7 @@ export default function Home(){
       const url=fix(e.url.trim());
       try{new URL(url)}catch{continue}
       if(have.has(norm(url)))continue;
-      have.add(norm(url));add.push({url,name:e.name||host(url),cat:e.cat||c,on:true,auto:true});
+      have.add(norm(url));add.push({url,name:e.name||host(url),cat:e.cat||c,on:true,auto:true,seed:e.seed});
     }
     if(add.length){setSources(s=>[...s,...add]);refresh(add)}
     return add.length;
@@ -157,20 +157,32 @@ export default function Home(){
       </div>
     </div>}
 
-    {modal&&<SourcesModal {...{sources,setSources,status,addSources,onClose:()=>setModal(false)}}/>}
+    {modal&&<SourcesModal {...{sources,setSources,setItems,status,addSources,onClose:()=>setModal(false)}}/>}
   </>);
 }
 
-function SourcesModal({sources,setSources,status,addSources,onClose}){
+function SourcesModal({sources,setSources,setItems,status,addSources,onClose}){
   const [url,setUrl]=useState('');const [cat,setCat]=useState(CATS[0]);const [bulk,setBulk]=useState('');const [msg,setMsg]=useState('');
   const upd=(u,p)=>setSources(s=>s.map(x=>x.url===u?{...x,...p}:x));
+  const exportOpml=()=>{
+    const esc=t=>String(t).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+    const by={};sources.forEach(s=>(by[s.cat]=by[s.cat]||[]).push(s));
+    const body=Object.entries(by).map(([c,l])=>`<outline text="${esc(c)}" title="${esc(c)}">\n`+l.map(s=>`  <outline type="rss" text="${esc(s.name)}" title="${esc(s.name)}" xmlUrl="${esc(s.url)}" htmlUrl="${esc(s.url)}" category="${esc(s.cat)}"/>`).join('\n')+'\n</outline>').join('\n');
+    const t=`<?xml version="1.0" encoding="UTF-8"?>\n<opml version="2.0"><head><title>Il Margine - fonti</title></head><body>\n${body}\n</body></opml>`;
+    const a=document.createElement('a');a.href=URL.createObjectURL(new Blob([t],{type:'text/xml'}));a.download='il-margine-fonti.opml';a.click();
+    setMsg(`${sources.length} fonti esportate in il-margine-fonti.opml (reimportabile da “Importazione massiva”).`);
+  };
+  const clearAll=()=>{
+    if(!sources.length)return;
+    if(window.confirm(`Eliminare tutte le ${sources.length} fonti? Gli articoli salvati nei Preferiti restano. Consiglio di esportarle prima.`)){setSources([]);setItems([]);setMsg('Tutte le fonti sono state eliminate.');}
+  };
   const importText=(text,name)=>{
     let entries=[];
     if(/<opml/i.test(text)){
       const d=new DOMParser().parseFromString(text,'text/xml');
       d.querySelectorAll('outline').forEach(o=>{
         const u=o.getAttribute('xmlUrl')||o.getAttribute('xmlurl');
-        if(u)entries.push({url:u,name:o.getAttribute('title')||o.getAttribute('text')});
+        if(u){const pc=o.parentElement?.getAttribute('text');entries.push({url:u,name:o.getAttribute('title')||o.getAttribute('text'),cat:o.getAttribute('category')||(CATS.includes(pc)?pc:undefined)});}
       });
     }else entries=(text.match(/https?:\/\/[^\s,;"'<>]+|(?:^|[\s,;])(?:[\w-]+\.)+[a-z]{2,}(?:\/[^\s,;"'<>]*)?/gim)||[]).map(u=>({url:u.trim().replace(/^[,;]/,'')}));
     setMsg(`${addSources(entries,cat)} nuove fonti aggiunte${name?' da '+name:''}.`);
@@ -192,6 +204,11 @@ function SourcesModal({sources,setSources,status,addSources,onClose}){
         </div></details>
       {msg&&<p className="ok">{msg}</p>}
       <p style={{fontSize:13,color:'var(--mut)'}}>Fonti attive con articoli: {sources.filter(s=>s.on&&status[s.url]?.includes('✓')).length} / {sources.filter(s=>s.on).length}</p>
+      <div style={{display:'flex',gap:8,flexWrap:'wrap',margin:'8px 0'}}>
+        <button className="btn" onClick={exportOpml} disabled={!sources.length}>⬇ Esporta fonti (.opml)</button>
+        <button className="btn" onClick={()=>setMsg(`${addSources(SEEDS,CATS[0])} fonti predefinite ripristinate.`)}>Ripristina predefinite</button>
+        <button className="btn" style={{marginLeft:'auto',color:'#c62828',borderColor:'#c62828'}} onClick={clearAll} disabled={!sources.length}>🗑 Elimina tutte le fonti</button>
+      </div>
       {sources.map(s=><div className="row" key={s.url}>
         <input type="checkbox" checked={s.on} onChange={e=>upd(s.url,{on:e.target.checked})} title="Attiva/disattiva"/>
         <div className="n"><b>{s.name}</b><div style={{fontSize:12,color:'var(--mut)'}}>{host(s.url)} · <span className={status[s.url]?.includes('✓')?'ok':status[s.url]==='In corso…'?'':'err'}>{status[s.url]||''}</span></div></div>
