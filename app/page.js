@@ -31,32 +31,43 @@ export default function Home(){
   const [dark,setDark]=useState(false);
   const [view,setView]=useState('grid');
   const [q,setQ]=useState('');const [cat,setCat]=useState('Tutte');const [src,setSrc]=useState('');const [tab,setTab]=useState('all');
-  const [loading,setLoading]=useState(false);const [status,setStatus]=useState({});
+  const [loading,setLoading]=useState(false);const [prog,setProg]=useState({done:0,total:0});const [note,setNote]=useState('');const [status,setStatus]=useState({});
   const [reader,setReader]=useState(null);const [modal,setModal]=useState(false);
 
-  const refresh=useCallback(async list=>{
-    const urls=list.filter(s=>s.on).map(s=>s.url);
-    if(!urls.length)return;
-    setLoading(true);
-    for(let i=0;i<urls.length;i+=6){
-      const r=await fetch('/api/feed',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({urls:urls.slice(i,i+6)})}).then(r=>r.json()).catch(()=>({results:[]}));
-      for(const x of r.results||[]){
-        setStatus(s=>({...s,[x.url]:x.ok?(x.items.length?`${x.feedUrl?'Feed':'Scraping'} ✓ ${x.items.length} articoli`:'Nessun articolo trovato'):x.error}));
-        if(x.ok&&x.title)setSources(s=>s.map(a=>a.url===x.url&&a.auto?{...a,name:a.seed?a.name:x.title}:a));
+  const refresh=useCallback(async(list,force=false)=>{
+    const FRESH=15*60*1000;
+    const todo=list.filter(s=>s.on&&(force||!s.last||Date.now()-s.last>FRESH));
+    if(!todo.length){setNote('Tutte le fonti sono già aggiornate (meno di 15 minuti fa). Usa “Aggiorna tutto” per forzare.');return;}
+    setNote('');setLoading(true);setProg({done:0,total:todo.length});
+    setStatus(s=>({...s,...Object.fromEntries(todo.map(x=>[x.url,'In corso…']))}));
+    let k=0;
+    const worker=async()=>{
+      while(k<todo.length){
+        const src=todo[k++];
+        const feed=force&&src.feed==='none'?undefined:src.feed;
+        const r=await fetch('/api/feed',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({urls:[{url:src.url,feed}]})}).then(r=>r.json()).catch(()=>({results:[{url:src.url,ok:false,error:'Errore di rete o timeout',items:[]}]}));
+        for(const x of r.results||[]){
+          setStatus(s=>({...s,[x.url]:x.ok?(x.items.length?`${x.feedUrl?'Feed':'Scraping'} ✓ ${x.items.length} articoli`:'Nessun articolo trovato'):x.error}));
+          if(x.ok)setSources(s=>s.map(a=>a.url===x.url?{...a,last:Date.now(),feed:x.feedUrl||'none',name:a.auto&&!a.seed&&x.title?x.title:a.name}:a));
+          setItems(p=>merge(p,x.items.map(it=>({...it,src:x.url}))));
+        }
+        setProg(p=>({...p,done:p.done+1}));
       }
-      const fresh=(r.results||[]).flatMap(x=>x.items.map(it=>({...it,src:x.url})));
-      setItems(p=>merge(p,fresh));
-    }
+    };
+    await Promise.all(Array.from({length:Math.min(6,todo.length)},worker));
     setLoading(false);
   },[]);
 
   useEffect(()=>{
-    const s=store.get('sources',SEEDS);
-    setSources(s);setItems(store.get('items',[]));setSaved(store.get('saved',[]));
+    const s0=store.get('sources',SEEDS);
+    const have=new Set(s0.map(x=>norm(x.url)));
+    const s=store.get('seedv',0)<2?[...s0,...SEEDS.filter(x=>!have.has(norm(x.url)))]:s0;
+    store.set('seedv',2);
+    setSources(s);setItems(store.get('items',[]));setStatus(Object.fromEntries(Object.entries(store.get('status',{})).filter(([,v])=>v!=='In corso…')));setSaved(store.get('saved',[]));
     setDark(store.get('dark',matchMedia('(prefers-color-scheme: dark)').matches));
     setView(store.get('view','grid'));setReady(true);refresh(s);
   },[refresh]);
-  useEffect(()=>{if(ready){store.set('sources',sources);store.set('saved',saved);store.set('view',view);store.set('dark',dark);store.set('items',items.slice(0,300))}},[ready,sources,saved,view,dark,items]);
+  useEffect(()=>{if(ready){store.set('sources',sources);store.set('saved',saved);store.set('view',view);store.set('dark',dark);store.set('items',items.slice(0,300));store.set('status',status)}},[ready,sources,saved,view,dark,items,status]);
   useEffect(()=>{document.documentElement.dataset.theme=dark?'dark':'light'},[dark]);
 
   const smap=useMemo(()=>Object.fromEntries(sources.map(s=>[s.url,s])),[sources]);
@@ -98,7 +109,8 @@ export default function Home(){
       <input type="search" placeholder="Cerca: AIE, Salone del Libro, classifiche…" value={q} onChange={e=>setQ(e.target.value)} style={{flex:'1 1 220px',maxWidth:420}}/>
       <button className="btn" onClick={()=>{const v=view==='grid'?'list':'grid';setView(v)}} title="Cambia vista">{view==='grid'?'☰ Lista':'▦ Griglia'}</button>
       <button className="btn" onClick={()=>setDark(!dark)}>{dark?'☀':'☾'}</button>
-      <button className="btn on" onClick={()=>refresh(sources)} disabled={loading}>{loading?'Aggiorno…':'↻ Aggiorna Feed'}</button>
+      <button className="btn on" onClick={()=>refresh(sources)} disabled={loading}>{loading?`Aggiorno… ${prog.done}/${prog.total}`:'↻ Aggiorna Feed'}</button>
+      <button className="btn" onClick={()=>refresh(sources,true)} disabled={loading} title="Ricarica tutte le fonti, anche quelle appena aggiornate">Aggiorna tutto</button>
       <button className="btn pri" onClick={()=>setModal(true)}>＋ Gestisci fonti</button>
     </header>
     <div className="bar">
@@ -114,8 +126,8 @@ export default function Home(){
         <button className="btn" onClick={()=>exportSaved('md')}>Esporta .md</button>
         <button className="btn" onClick={()=>exportSaved('csv')}>Esporta .csv</button></>}
     </div>
-    <main>
-      {!list.length&&<div className="empty">{loading?'Carico le notizie dalle fonti…':tab==='saved'?'Nessun preferito: tocca ☆ su un articolo.':'Nessun articolo trovato.'}</div>}
+    <main>{note&&<div style={{color:'var(--mut)',padding:'4px 0 14px'}}>{note}</div>}
+      {!list.length&&<div className="empty">{loading?`Carico le notizie… ${prog.done}/${prog.total} fonti controllate`:tab==='saved'?'Nessun preferito: tocca ☆ su un articolo.':'Nessun articolo trovato.'}</div>}
       <div className={view==='grid'?'grid':'list'}>
         {list.map(i=>(
           <article key={i.link} className="card" onClick={()=>openReader(i)}>
@@ -182,7 +194,7 @@ function SourcesModal({sources,setSources,status,addSources,onClose}){
       <p style={{fontSize:13,color:'var(--mut)'}}>Fonti attive con articoli: {sources.filter(s=>s.on&&status[s.url]?.includes('✓')).length} / {sources.filter(s=>s.on).length}</p>
       {sources.map(s=><div className="row" key={s.url}>
         <input type="checkbox" checked={s.on} onChange={e=>upd(s.url,{on:e.target.checked})} title="Attiva/disattiva"/>
-        <div className="n"><b>{s.name}</b><div style={{fontSize:12,color:'var(--mut)'}}>{host(s.url)} · <span className={status[s.url]?.includes('✓')?'ok':'err'}>{status[s.url]||''}</span></div></div>
+        <div className="n"><b>{s.name}</b><div style={{fontSize:12,color:'var(--mut)'}}>{host(s.url)} · <span className={status[s.url]?.includes('✓')?'ok':status[s.url]==='In corso…'?'':'err'}>{status[s.url]||''}</span></div></div>
         <select value={s.cat} onChange={e=>upd(s.url,{cat:e.target.value})} style={{maxWidth:170}}>{CATS.map(c=><option key={c}>{c}</option>)}</select>
         <button className="btn" onClick={()=>setSources(x=>x.filter(a=>a.url!==s.url))} title="Elimina">🗑</button>
       </div>)}
