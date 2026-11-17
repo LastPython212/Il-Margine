@@ -7,7 +7,7 @@ const store={
   get:(k,d)=>{try{return JSON.parse(localStorage.getItem('im.'+k))??d}catch{return d}},
   set:(k,v)=>{try{localStorage.setItem('im.'+k,JSON.stringify(v))}catch{}}
 };
-const norm=u=>{try{const x=new URL(u);return(x.host+x.pathname).replace(/\/$/,'').toLowerCase()}catch{return u}};
+const norm=u=>{try{const x=new URL(u);return(x.host+x.pathname+(x.hash.startsWith('#im-')?x.hash:'')).replace(/\/$/,'').toLowerCase()}catch{return u}};
 const fmt=d=>new Date(d).toLocaleDateString('it-IT',{day:'numeric',month:'short',year:'numeric'});
 const host=u=>{try{return new URL(u).hostname.replace('www.','')}catch{return u}};
 const fix=u=>/^https?:\/\//i.test(u)?u:'https://'+u;
@@ -61,8 +61,8 @@ export default function Home(){
   useEffect(()=>{
     const s0=store.get('sources',SEEDS);
     const have=new Set(s0.map(x=>norm(x.url)));
-    const s=store.get('seedv',0)<2?[...s0,...SEEDS.filter(x=>!have.has(norm(x.url)))]:s0;
-    store.set('seedv',2);
+    const s=store.get('seedv',0)<3?[...s0,...SEEDS.filter(x=>!have.has(norm(x.url)))]:s0;
+    store.set('seedv',3);
     setSources(s);setItems(store.get('items',[]));setStatus(Object.fromEntries(Object.entries(store.get('status',{})).filter(([,v])=>v!=='In corso…')));setSaved(store.get('saved',[]));
     setDark(store.get('dark',matchMedia('(prefers-color-scheme: dark)').matches));
     setView(store.get('view','grid'));setReady(true);refresh(s);
@@ -80,8 +80,8 @@ export default function Home(){
 
   const toggleSave=i=>setSaved(s=>savedIds.has(norm(i.link))?s.filter(x=>norm(x.link)!==norm(i.link)):[i,...s]);
   const openReader=async i=>{
-    setReader({...i,loading:i.paras.length<3});
-    if(i.paras.length<3){
+    setReader({...i,loading:i.paras.length<3&&!i.shallow});
+    if(i.paras.length<3&&!i.shallow){
       const r=await fetch('/api/article?url='+encodeURIComponent(i.link)).then(r=>r.json()).catch(()=>({paras:[]}));
       setReader(c=>c&&c.link===i.link?{...c,loading:false,paras:r.paras?.length?r.paras:[i.excerpt],image:c.image||r.image}:c);
     }
