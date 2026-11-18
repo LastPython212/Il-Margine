@@ -47,7 +47,7 @@ export default function Home(){
         const feed=force&&src.feed==='none'?undefined:src.feed;
         const r=await fetch('/api/feed',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({urls:[{url:src.url,feed}]})}).then(r=>r.json()).catch(()=>({results:[{url:src.url,ok:false,error:'Errore di rete o timeout',items:[]}]}));
         for(const x of r.results||[]){
-          setStatus(s=>({...s,[x.url]:x.ok?(x.items.length?`${x.feedUrl?'Feed':'Scraping'} ✓ ${x.items.length} articoli`:'Nessun articolo trovato'):x.error}));
+          setStatus(s=>({...s,[x.url]:x.ok?(x.items.length?`${x.feedUrl?.includes('news.google.com')?'Via Google News':x.feedUrl?'Feed':'Scraping'} ✓ ${x.items.length} articoli`:'Nessun articolo trovato'):x.error}));
           if(x.ok)setSources(s=>s.map(a=>a.url===x.url?{...a,last:Date.now(),feed:x.feedUrl||'none',name:a.auto&&!a.seed&&x.title?x.title:a.name}:a));
           setItems(p=>merge(p,x.items.map(it=>({...it,src:x.url}))));
         }
