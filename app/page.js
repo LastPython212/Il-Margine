@@ -10,8 +10,11 @@ const store={
 const norm=u=>{try{const x=new URL(u);return(x.host+x.pathname+(x.hash.startsWith('#im-')?x.hash:'')).replace(/\/$/,'').toLowerCase()}catch{return u}};
 const fmt=d=>new Date(d).toLocaleDateString('it-IT',{day:'numeric',month:'short',year:'numeric'});
 const host=u=>{try{return new URL(u).hostname.replace('www.','')}catch{return u}};
+const skey=u=>{try{const x=new URL(/^https?:\/\//i.test(u)?u:'https://'+u);return(x.hostname.replace(/^www\./,'')+x.pathname.replace(/\/$/,'')+x.search).toLowerCase()}catch{return String(u).toLowerCase()}};
 const fix=u=>/^https?:\/\//i.test(u)?u:'https://'+u;
 function merge(prev,next){
+  const pm=new Map(prev.map(i=>[norm(i.link),i]));
+  next=next.map(i=>i.undated&&pm.has(norm(i.link))?{...i,date:pm.get(norm(i.link)).date}:i);
   const m=new Map();
   for(const i of [...next,...prev]){
     const k=norm(i.link),t=i.title.toLowerCase();
@@ -49,7 +52,7 @@ export default function Home(){
         for(const x of r.results||[]){
           setStatus(s=>({...s,[x.url]:x.ok?(x.items.length?`${x.feedUrl?.includes('news.google.com')?'Via Google News':x.feedUrl?'Feed':'Scraping'} ✓ ${x.items.length} articoli`:'Nessun articolo trovato'):x.error}));
           if(x.ok)setSources(s=>s.map(a=>a.url===x.url?{...a,last:Date.now(),feed:x.feedUrl||'none',name:a.auto&&!a.seed&&x.title?x.title:a.name}:a));
-          setItems(p=>merge(p,x.items.map(it=>({...it,src:x.url}))));
+          setItems(p=>merge(p,x.items.map(it=>({...it,src:x.url,undated:!x.feedUrl}))));
         }
         setProg(p=>({...p,done:p.done+1}));
       }
@@ -61,8 +64,8 @@ export default function Home(){
   useEffect(()=>{
     const s0=store.get('sources',SEEDS);
     const have=new Set(s0.map(x=>norm(x.url)));
-    const s=store.get('seedv',0)<3?[...s0,...SEEDS.filter(x=>!have.has(norm(x.url)))]:s0;
-    store.set('seedv',3);
+    const s=store.get('seedv',0)<4?[...s0,...SEEDS.filter(x=>!have.has(norm(x.url)))]:s0;
+    store.set('seedv',4);
     setSources(s);setItems(store.get('items',[]));setStatus(Object.fromEntries(Object.entries(store.get('status',{})).filter(([,v])=>v!=='In corso…')));setSaved(store.get('saved',[]));
     setDark(store.get('dark',matchMedia('(prefers-color-scheme: dark)').matches));
     setView(store.get('view','grid'));setReady(true);refresh(s);
@@ -88,15 +91,16 @@ export default function Home(){
   };
 
   const addSources=(entries,c)=>{
-    const have=new Set(sources.map(s=>norm(s.url)));const add=[];
+    const have=new Map(sources.map(s=>[skey(s.url),s.name]));const add=[],dup=[];
     for(const e of entries){
       const url=fix(e.url.trim());
       try{new URL(url)}catch{continue}
-      if(have.has(norm(url)))continue;
-      have.add(norm(url));add.push({url,name:e.name||host(url),cat:e.cat||c,on:true,auto:true,seed:e.seed});
+      const k=skey(url);
+      if(have.has(k)){dup.push(have.get(k));continue}
+      have.set(k,e.name||host(url));add.push({url,name:e.name||host(url),cat:e.cat||c,on:true,auto:true,seed:e.seed});
     }
     if(add.length){setSources(s=>[...s,...add]);refresh(add)}
-    return add.length;
+    return{n:add.length,dup};
   };
   const exportSaved=fmt2=>{
     if(fmt2==='md')download('preferiti.md',saved.map(i=>`- [${i.title}](${i.link})`).join('\n'));
@@ -185,7 +189,9 @@ function SourcesModal({sources,setSources,setItems,status,addSources,onClose}){
         if(u){const pc=o.parentElement?.getAttribute('text');entries.push({url:u,name:o.getAttribute('title')||o.getAttribute('text'),cat:o.getAttribute('category')||(CATS.includes(pc)?pc:undefined)});}
       });
     }else entries=(text.match(/https?:\/\/[^\s,;"'<>]+|(?:^|[\s,;])(?:[\w-]+\.)+[a-z]{2,}(?:\/[^\s,;"'<>]*)?/gim)||[]).map(u=>({url:u.trim().replace(/^[,;]/,'')}));
-    setMsg(`${addSources(entries,cat)} nuove fonti aggiunte${name?' da '+name:''}.`);
+    const r=addSources(entries,cat);
+    setMsg(r.n?`${r.n} nuove fonti aggiunte${name?' da '+name:''}.`:'Nessuna nuova fonte aggiunta.'+(r.dup.length?'':' Controlla l’indirizzo.')+(r.dup.length?` Già presente: ${r.dup.slice(0,3).join(', ')}${r.dup.length>3?` e altre ${r.dup.length-3}`:''}.`:''));
+    if(r.n&&r.dup.length)setMsg(m=>m+` Già presenti (ignorate): ${r.dup.slice(0,3).join(', ')}${r.dup.length>3?` e altre ${r.dup.length-3}`:''}.`);
   };
   return(<div className="ov" style={{justifyContent:'center'}} onClick={onClose}>
     <div className="modal" onClick={e=>e.stopPropagation()}>
@@ -206,7 +212,7 @@ function SourcesModal({sources,setSources,setItems,status,addSources,onClose}){
       <p style={{fontSize:13,color:'var(--mut)'}}>Fonti attive con articoli: {sources.filter(s=>s.on&&status[s.url]?.includes('✓')).length} / {sources.filter(s=>s.on).length}</p>
       <div style={{display:'flex',gap:8,flexWrap:'wrap',margin:'8px 0'}}>
         <button className="btn" onClick={exportOpml} disabled={!sources.length}>⬇ Esporta fonti (.opml)</button>
-        <button className="btn" onClick={()=>setMsg(`${addSources(SEEDS,CATS[0])} fonti predefinite ripristinate.`)}>Ripristina predefinite</button>
+        <button className="btn" onClick={()=>setMsg(`${addSources(SEEDS,CATS[0]).n} fonti predefinite ripristinate.`)}>Ripristina predefinite</button>
         <button className="btn" style={{marginLeft:'auto',color:'#c62828',borderColor:'#c62828'}} onClick={clearAll} disabled={!sources.length}>🗑 Elimina tutte le fonti</button>
       </div>
       {sources.map(s=><div className="row" key={s.url}>
